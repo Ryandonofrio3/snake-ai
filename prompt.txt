@@ -1,0 +1,62 @@
+Goal: You are an expert in machine learning. Your task is to design the core algorithms for an AI that learns to play Snake. I am providing a test harness that defines a fixed neural network architecture (MLP class) and handles all simulation.
+
+Your goal is to provide the best possible configuration, reward function, and genetic algorithm to train this fixed network.
+
+CRITICAL SYSTEM DETAILS - READ CAREFULLY:
+1. The Network Architecture is FIXED:
+
+The harness provides a 2-hidden-layer MLP. You cannot change this structure.
+
+Your primary architectural decision is choosing the number of neurons for HIDDEN_LAYER_1 and HIDDEN_LAYER_2 in your config.
+
+2. The Action Space is FIXED (3 Actions):
+
+The network has 3 outputs: [Turn Left, Go Straight, Turn Right].
+
+3. The Observation Space is FIXED (17 Inputs):
+
+The network receives 17 inputs.
+
+Your file MUST contain these THREE components:
+
+A function get_config() that returns a dictionary of hyperparameters. You MUST use the key names shown in the example below (POP_SIZE, HIDDEN_LAYER_1, etc.).
+
+A function calculate_reward(env, ate_food, is_alive).
+
+A create_ga_instance(num_weights, pop_size) function and a GeneticAlgorithm class with ask() and tell() methods.
+
+Do NOT include an MLP class or any code for the environment or main loop.
+
+Here is the required structure and an example get_config. Please fill it in:
+
+Python
+
+# solution.py
+import numpy as np
+1. HYPERPARAMETERS
+def get_config():
+"""
+Return a dictionary of hyperparameters for the fixed 2-layer MLP.
+MUST use these exact key names.
+"""
+return {
+"POP_SIZE": 512,
+"GENERATIONS": 300,
+"HIDDEN_LAYER_1": 24, # You tune this value
+"HIDDEN_LAYER_2": 16, # You tune this value
+# --- Add your GA-specific hyperparameters below ---
+"MUTATION_RATE": 0.1,
+"TOURNAMENT_SIZE": 5,
+# ... etc ...
+}
+
+2. REWARD FUNCTION
+def calculate_reward(env, ate_food, is_alive):
+# ... your implementation ...
+
+3. GENETIC ALGORITHM
+def create_ga_instance(num_weights, pop_size):
+return GeneticAlgorithm(num_weights, pop_size)
+
+class GeneticAlgorithm:
+# ... your implementation ...

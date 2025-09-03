@@ -216,3 +216,9 @@ __marimo__/
 .streamlit/secrets.toml
 
 checkpoints/
+xgboost_solutions/
+xgboost_checkpoints/
+xgboost_checkpoints
+xgboost_checkpoints/*
+xgboost_checkpoints/**/*
+# Add all possible patterns to ensure all files and subfolders are ignored

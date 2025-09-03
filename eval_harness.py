@@ -12,14 +12,10 @@ import glob
 import datetime
 import traceback
 
-# --- HARNESS CONFIGURATION ---
-# The harness now defines the fixed environment parameters.
+
 BOARD_WIDTH = 10
 BOARD_HEIGHT = 10
 
-# ==============================================================================
-# --- FIXED COMPONENTS (NOT TO BE CHANGED BY LLM) ---
-# ==============================================================================
 
 class MLP:
     """
@@ -125,9 +121,7 @@ class SnakeEnv:
         if not (0 <= right_pos[0] < self.width and 0 <= right_pos[1] < self.height) or right_pos in self.snake: danger_right = 1.0
         return np.concatenate([wall_dist, [food_dx, food_dy], tail_dir, [danger_fwd, danger_left, danger_right]]).astype(np.float32)
 
-# ==============================================================================
-# --- WORKER & MAIN SCRIPT ---
-# ==============================================================================
+
 LLM_SOLUTION = None
 
 def init_worker(solution_name):

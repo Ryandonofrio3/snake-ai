@@ -8,29 +8,62 @@ import sys
 import os
 import glob
 import random
+import joblib
+import traceback
 
 # We need the SnakeEnv from the harness to run the simulation
-from eval_harness import SnakeEnv
+from eval_harness import SnakeEnv, MLP, get_config_value
+
+# Wrapper for XGBoost models to provide a consistent policy interface
+class XGBPolicy:
+    def __init__(self, model):
+        self.model = model
+
+    def get_action(self, obs, weights=None):  # weights=None for compatibility
+        if obs.ndim == 1:
+            obs = obs.reshape(1, -1)
+        action_probs = self.model.predict_proba(obs)
+        return np.argmax(action_probs)
 
 class MultiViewer:
-    def __init__(self, speed=10, num_seeds=5, timeout=200):
-        # Auto-discover all latest checkpoints
-        self.agent_files = self.find_latest_checkpoints()
+    def __init__(self, speed=10, num_seeds=5, timeout=200, xgboost_mode=False, solutions=None):
+        # Auto-discover all latest checkpoints (MLP or XGBoost based on mode)
+        if xgboost_mode:
+            if not solutions:
+                print("Error: XGBoost mode requires --solutions to be specified.")
+                sys.exit(1)
+            self.agent_files = self.find_latest_xgboost_checkpoints(solutions)
+            if len(self.agent_files) == 0:
+                print("Error: No XGBoost checkpoint files found for the specified solutions in 'xgboost_checkpoints/'.")
+                sys.exit(1)
+        else:
+            self.agent_files = self.find_latest_llm_checkpoints()
+            if len(self.agent_files) == 0:
+                print("Error: No LLM checkpoint files found in 'checkpoints/'.")
+                sys.exit(1)
+        
+        self.xgboost_mode = xgboost_mode
         self.num_agents = len(self.agent_files)
-        if self.num_agents == 0:
-            print("Error: No agent checkpoint files found.")
-            sys.exit(1)
 
         print(f"Found {self.num_agents} agents with latest checkpoints")
         for i, f in enumerate(self.agent_files):
             print(f"  {i+1}. {f}")
 
-        self.agents = [self.load_agent(f) for f in self.agent_files]
+        # Load agents and filter out any that fail to load
+        loaded_agents = [self.load_agent(f) for f in self.agent_files]
+        self.agents = [agent for agent in loaded_agents if agent is not None]
+
+        self.num_agents = len(self.agents)
+        if self.num_agents == 0:
+            print("\nError: No agents could be loaded successfully. Check error messages above.")
+            sys.exit(1)
         
         # Use the fixed board size from the harness
         from eval_harness import BOARD_WIDTH, BOARD_HEIGHT
-        self.board_w = BOARD_WIDTH
-        self.board_h = BOARD_HEIGHT
+        # self.board_w = BOARD_WIDTH
+        # self.board_h = BOARD_HEIGHT
+        self.board_w = 10
+        self.board_h = 10
         
         # Speed and seed controls
         self.speed = speed
@@ -63,18 +96,37 @@ class MultiViewer:
         
         self.start_new_round()
 
-    def find_latest_checkpoints(self):
-        """Find the latest checkpoint for each LLM solution."""
-        checkpoint_dirs = glob.glob("checkpoints/*/")
+    def find_latest_llm_checkpoints(self):
+        """Find the latest checkpoint for each LLM solution (MLP)."""
+        # Find MLP checkpoints
+        mlp_checkpoint_dirs = glob.glob("checkpoints/*/")
         latest_files = []
         
-        for checkpoint_dir in checkpoint_dirs:
-            # Find all .npy files in this directory
+        for checkpoint_dir in mlp_checkpoint_dirs:
             npy_files = glob.glob(os.path.join(checkpoint_dir, "*.npy"))
             if npy_files:
-                # Sort by modification time and get the latest
                 latest_file = max(npy_files, key=os.path.getmtime)
                 latest_files.append(latest_file)
+                
+        return sorted(latest_files)
+    
+    def find_latest_xgboost_checkpoints(self, solutions):
+        """Find the latest checkpoint for each specified XGBoost solution."""
+        latest_files = []
+        
+        xgb_checkpoint_dirs = [os.path.join("xgboost_checkpoints", s) for s in solutions]
+
+        for checkpoint_dir in xgb_checkpoint_dirs:
+            if not os.path.isdir(checkpoint_dir):
+                print(f"Warning: Checkpoint directory not found: {checkpoint_dir}")
+                continue
+            
+            joblib_files = glob.glob(os.path.join(checkpoint_dir, "*.joblib"))
+            if joblib_files:
+                latest_file = max(joblib_files, key=os.path.getmtime)
+                latest_files.append(latest_file)
+            else:
+                print(f"Warning: No .joblib checkpoints found in {checkpoint_dir}")
                 
         return sorted(latest_files)
     
@@ -102,36 +154,35 @@ class MultiViewer:
         self.all_dead = False
 
     def load_agent(self, file_path):
-        """Dynamically loads an agent's config, policy, and weights."""
+        """Dynamically loads an agent's config, policy, and weights/model."""
         print(f"Loading agent from: {file_path}")
+        is_xgb = file_path.endswith('.joblib')
+        
         try:
-            # Extract LLM name from path (e.g., checkpoints/gpt_5/gen_0300_food_24.20.npy)
-            # Handle both relative and absolute paths
             path_parts = file_path.replace('\\', '/').split('/')
-            checkpoint_idx = None
-            for i, part in enumerate(path_parts):
-                if part == 'checkpoints':
-                    checkpoint_idx = i
-                    break
             
-            if checkpoint_idx is None or checkpoint_idx + 1 >= len(path_parts):
-                raise ValueError("Could not find 'checkpoints' directory in path")
+            if is_xgb:
+                # e.g., xgboost_checkpoints/claude/best_model_score_11.00.joblib
+                solution_name = path_parts[-2]
+                solution_module = importlib.import_module(f"xgboost_solutions.{solution_name}")
+                policy = XGBPolicy(joblib.load(file_path))
+                return {"name": f"xgb_{solution_name}", "policy": policy, "weights": None, "config": solution_module.get_config()}
+            else:
+                # e.g., checkpoints/gpt_5/gen_0300_food_24.20.npy
+                checkpoint_idx = path_parts.index('checkpoints')
+                llm_name = path_parts[checkpoint_idx + 1]
+                solution_module = importlib.import_module(f"llm_solutions.{llm_name}")
                 
-            llm_name = path_parts[checkpoint_idx + 1]
-            solution_module = importlib.import_module(f"llm_solutions.{llm_name}")
-            
-            config = solution_module.get_config()
-            # Use the harness MLP instead of solution's MLP for consistency
-            from eval_harness import MLP, get_config_value
-            h1 = get_config_value(config, "HIDDEN_LAYER_1", "hidden1", "H1_UNITS")
-            h2 = get_config_value(config, "HIDDEN_LAYER_2", "hidden2", "H2_UNITS")
-            policy = MLP(17, h1, h2)  # 17 is the correct input dimension
-            weights = np.load(file_path)
+                config = solution_module.get_config()
+                h1 = get_config_value(config, "HIDDEN_LAYER_1", "hidden1", "H1_UNITS")
+                h2 = get_config_value(config, "HIDDEN_LAYER_2", "hidden2", "H2_UNITS")
+                policy = MLP(17, h1, h2)
+                weights = np.load(file_path)
+                return {"name": llm_name, "policy": policy, "weights": weights, "config": config}
 
-            return {"name": llm_name, "policy": policy, "weights": weights, "config": config}
         except Exception as e:
-            print(f"Failed to load agent from {file_path}: {e}")
-            sys.exit(1)
+            print(f"Failed to load agent from {file_path}: {e}\n{traceback.format_exc()}")
+            return None
 
     def run(self):
         running = True
@@ -164,9 +215,10 @@ class MultiViewer:
                         
                         obs = env._get_observation()
                         action = agent['policy'].get_action(obs, agent['weights'])
-                        # We use the loaded agent's reward function
-                        llm_module = importlib.import_module(f"llm_solutions.{agent['name']}")
-                        env.step(action, llm_module.calculate_reward)
+                        
+                        # Use a dummy reward function for visualization, as it's not needed.
+                        # This lambda now accepts any arguments to prevent crashing.
+                        env.step(action, lambda *args, **kwargs: 0)
                         
                         # Check if food was eaten
                         new_score = len(env.snake) - 1
@@ -306,17 +358,30 @@ class MultiViewer:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Multi-Snake AI Tournament Viewer")
+    parser.add_argument('--xg', action='store_true', help='Use XGBoost mode instead of LLM genetic algorithm mode')
+    parser.add_argument('--solutions', type=str, nargs='+', 
+                        help='List of solution names to compare (required for XGBoost mode, e.g., claude gpt gemini)')
     parser.add_argument('--speed', type=int, default=10, help='Game speed (FPS, 1-60)')
     parser.add_argument('--seeds', type=int, default=5, help='Number of random seeds to test')
     parser.add_argument('--timeout', type=int, default=200, help='Max steps without food before timeout')
     args = parser.parse_args()
 
-    print("🐍 Multi-Snake AI Tournament 🐍")
-    print("Auto-discovering latest checkpoints...")
+    if args.xg:
+        print("🐍 XGBoost Multi-Snake AI Tournament 🐍")
+        print("Finding latest XGBoost checkpoints for specified solutions...")
+        mode_name = "XGBoost"
+    else:
+        print("🐍 LLM Genetic Algorithm Multi-Snake AI Tournament 🐍")
+        print("Auto-discovering latest LLM checkpoints...")
+        mode_name = "LLM Genetic Algorithm"
     
-    viewer = MultiViewer(speed=args.speed, num_seeds=args.seeds, timeout=args.timeout)
+    viewer = MultiViewer(speed=args.speed, num_seeds=args.seeds, timeout=args.timeout, 
+                        xgboost_mode=args.xg, solutions=args.solutions)
     
     print(f"\n🎮 Settings:")
+    print(f"  Mode: {mode_name}")
+    if args.xg and args.solutions:
+        print(f"  Solutions: {', '.join(args.solutions)}")
     print(f"  Speed: {args.speed} FPS")
     print(f"  Seeds: {args.seeds} rounds")
     print(f"  Timeout: {args.timeout} steps without food")

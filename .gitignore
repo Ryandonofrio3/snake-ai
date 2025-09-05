@@ -216,7 +216,7 @@ __marimo__/
 .streamlit/secrets.toml
 
 checkpoints/
-xgboost_solutions/
+# xgboost_solutions/
 xgboost_checkpoints/
 xgboost_checkpoints
 xgboost_checkpoints/*
